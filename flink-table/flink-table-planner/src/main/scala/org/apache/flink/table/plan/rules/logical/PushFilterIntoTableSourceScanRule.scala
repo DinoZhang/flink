@@ -23,11 +23,13 @@ import java.util
 import org.apache.calcite.plan.RelOptRule.{none, operand}
 import org.apache.calcite.plan.{RelOptRule, RelOptRuleCall}
 import org.apache.calcite.rex.RexProgram
-import org.apache.flink.table.expressions.Expression
+import org.apache.flink.table.api.{TableConfig, TableException}
+import org.apache.flink.table.catalog.{CatalogManager, FunctionCatalog, GenericInMemoryCatalog}
+import org.apache.flink.table.expressions.{Expression, PlannerExpression}
+import org.apache.flink.table.module.ModuleManager
 import org.apache.flink.table.plan.nodes.logical.{FlinkLogicalCalc, FlinkLogicalTableSourceScan}
 import org.apache.flink.table.plan.util.RexProgramExtractor
 import org.apache.flink.table.sources.FilterableTableSource
-import org.apache.flink.table.validate.FunctionCatalog
 import org.apache.flink.util.Preconditions
 
 import scala.collection.JavaConverters._
@@ -36,6 +38,10 @@ class PushFilterIntoTableSourceScanRule extends RelOptRule(
   operand(classOf[FlinkLogicalCalc],
     operand(classOf[FlinkLogicalTableSourceScan], none)),
   "PushFilterIntoTableSourceScanRule") {
+
+  private val defaultCatalog = "default_catalog"
+  private val catalogManager = new CatalogManager(
+    defaultCatalog, new GenericInMemoryCatalog(defaultCatalog, "default_database"))
 
   override def matches(call: RelOptRuleCall): Boolean = {
     val calc: FlinkLogicalCalc = call.rel(0).asInstanceOf[FlinkLogicalCalc]
@@ -64,12 +70,11 @@ class PushFilterIntoTableSourceScanRule extends RelOptRule(
     Preconditions.checkArgument(!filterableSource.isFilterPushedDown)
 
     val program = calc.getProgram
-    val functionCatalog = FunctionCatalog.withBuiltIns
     val (predicates, unconvertedRexNodes) =
       RexProgramExtractor.extractConjunctiveConditions(
         program,
         call.builder().getRexBuilder,
-        functionCatalog)
+        new FunctionCatalog(TableConfig.getDefault, catalogManager, new ModuleManager))
     if (predicates.isEmpty) {
       // no condition can be translated to expression
       return
@@ -80,13 +85,25 @@ class PushFilterIntoTableSourceScanRule extends RelOptRule(
 
     val newTableSource = filterableSource.applyPredicate(remainingPredicates)
 
+    if (newTableSource.asInstanceOf[FilterableTableSource[_]].isFilterPushedDown
+      && newTableSource.explainSource().equals(scan.tableSource.explainSource())) {
+      throw new TableException("Failed to push filter into table source! "
+        + "table source with pushdown capability must override and change "
+        + "explainSource() API to explain the pushdown applied!")
+    }
+
     // check whether framework still need to do a filter
     val relBuilder = call.builder()
     val remainingCondition = {
       if (!remainingPredicates.isEmpty || unconvertedRexNodes.nonEmpty) {
         relBuilder.push(scan)
-        val remainingConditions =
-          (remainingPredicates.asScala.map(expr => expr.toRexNode(relBuilder))
+
+        // TODO we cast to planner expressions as a temporary solution to keep the old interfaces
+        val remainingPrecidatesAsExpr = remainingPredicates
+          .asScala
+          .map(_.asInstanceOf[PlannerExpression])
+
+        val remainingConditions = (remainingPrecidatesAsExpr.map(_.toRexNode(relBuilder))
               ++ unconvertedRexNodes)
         remainingConditions.reduce((l, r) => relBuilder.and(l, r))
       } else {
@@ -96,7 +113,7 @@ class PushFilterIntoTableSourceScanRule extends RelOptRule(
 
     // check whether we still need a RexProgram. An RexProgram is needed when either
     // projection or filter exists.
-    val newScan = scan.copy(scan.getTraitSet, newTableSource, scan.selectedFields)
+    val newScan = scan.copy(scan.getTraitSet, scan.tableSchema, newTableSource, scan.selectedFields)
     val newRexProgram = {
       if (remainingCondition != null || !program.projectsOnlyIdentity) {
         val expandedProjectList = program.getProjectList.asScala

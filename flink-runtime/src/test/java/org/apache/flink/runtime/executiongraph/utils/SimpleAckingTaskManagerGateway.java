@@ -26,13 +26,16 @@ import org.apache.flink.runtime.concurrent.FutureUtils;
 import org.apache.flink.runtime.deployment.TaskDeploymentDescriptor;
 import org.apache.flink.runtime.executiongraph.ExecutionAttemptID;
 import org.apache.flink.runtime.executiongraph.PartitionInfo;
+import org.apache.flink.runtime.io.network.partition.ResultPartitionID;
 import org.apache.flink.runtime.jobmanager.slots.TaskManagerGateway;
 import org.apache.flink.runtime.messages.Acknowledge;
-import org.apache.flink.runtime.messages.StackTraceSampleResponse;
+import org.apache.flink.runtime.messages.TaskBackPressureResponse;
 
-import java.util.Optional;
+import java.util.Collection;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 
@@ -44,27 +47,40 @@ public class SimpleAckingTaskManagerGateway implements TaskManagerGateway {
 
 	private final String address = UUID.randomUUID().toString();
 
-	private Optional<Consumer<ExecutionAttemptID>> optSubmitConsumer;
+	private Consumer<TaskDeploymentDescriptor> submitConsumer = ignore -> { };
 
-	private Optional<Consumer<ExecutionAttemptID>> optCancelConsumer;
+	private Consumer<ExecutionAttemptID> cancelConsumer = ignore -> { };
 
 	private volatile BiFunction<AllocationID, Throwable, CompletableFuture<Acknowledge>> freeSlotFunction;
 
-	public SimpleAckingTaskManagerGateway() {
-		optSubmitConsumer = Optional.empty();
-		optCancelConsumer = Optional.empty();
+	private BiConsumer<JobID, Collection<ResultPartitionID>> releasePartitionsConsumer = (ignore1, ignore2) -> { };
+
+	private CheckpointConsumer checkpointConsumer = (
+		executionAttemptID,
+		jobId,
+		checkpointId,
+		timestamp,
+		checkpointOptions,
+		advanceToEndOfEventTime) -> { };
+
+	public void setSubmitConsumer(Consumer<TaskDeploymentDescriptor> submitConsumer) {
+		this.submitConsumer = submitConsumer;
 	}
 
-	public void setSubmitConsumer(Consumer<ExecutionAttemptID> predicate) {
-		optSubmitConsumer = Optional.of(predicate);
-	}
-
-	public void setCancelConsumer(Consumer<ExecutionAttemptID> predicate) {
-		optCancelConsumer = Optional.of(predicate);
+	public void setCancelConsumer(Consumer<ExecutionAttemptID> cancelConsumer) {
+		this.cancelConsumer = cancelConsumer;
 	}
 
 	public void setFreeSlotFunction(BiFunction<AllocationID, Throwable, CompletableFuture<Acknowledge>> freeSlotFunction) {
 		this.freeSlotFunction = freeSlotFunction;
+	}
+
+	public void setReleasePartitionsConsumer(BiConsumer<JobID, Collection<ResultPartitionID>> releasePartitionsConsumer) {
+		this.releasePartitionsConsumer = releasePartitionsConsumer;
+	}
+
+	public void setCheckpointConsumer(CheckpointConsumer checkpointConsumer) {
+		this.checkpointConsumer = checkpointConsumer;
 	}
 
 	@Override
@@ -73,30 +89,22 @@ public class SimpleAckingTaskManagerGateway implements TaskManagerGateway {
 	}
 
 	@Override
-	public CompletableFuture<StackTraceSampleResponse> requestStackTraceSample(
+	public CompletableFuture<TaskBackPressureResponse> requestTaskBackPressure(
 			ExecutionAttemptID executionAttemptID,
-			int sampleId,
-			int numSamples,
-			Time delayBetweenSamples,
-			int maxStackTraceDepth,
+			int requestId,
 			Time timeout) {
 		return FutureUtils.completedExceptionally(new UnsupportedOperationException());
 	}
 
 	@Override
 	public CompletableFuture<Acknowledge> submitTask(TaskDeploymentDescriptor tdd, Time timeout) {
-		optSubmitConsumer.ifPresent(condition -> condition.accept(tdd.getExecutionAttemptId()));
-		return CompletableFuture.completedFuture(Acknowledge.get());
-	}
-
-	@Override
-	public CompletableFuture<Acknowledge> stopTask(ExecutionAttemptID executionAttemptID, Time timeout) {
+		submitConsumer.accept(tdd);
 		return CompletableFuture.completedFuture(Acknowledge.get());
 	}
 
 	@Override
 	public CompletableFuture<Acknowledge> cancelTask(ExecutionAttemptID executionAttemptID, Time timeout) {
-		optCancelConsumer.ifPresent(condition -> condition.accept(executionAttemptID));
+		cancelConsumer.accept(executionAttemptID);
 		return CompletableFuture.completedFuture(Acknowledge.get());
 	}
 
@@ -106,7 +114,9 @@ public class SimpleAckingTaskManagerGateway implements TaskManagerGateway {
 	}
 
 	@Override
-	public void failPartition(ExecutionAttemptID executionAttemptID) {}
+	public void releasePartitions(JobID jobId, Set<ResultPartitionID> partitionIds) {
+		releasePartitionsConsumer.accept(jobId, partitionIds);
+	}
 
 	@Override
 	public void notifyCheckpointComplete(
@@ -121,7 +131,17 @@ public class SimpleAckingTaskManagerGateway implements TaskManagerGateway {
 			JobID jobId,
 			long checkpointId,
 			long timestamp,
-			CheckpointOptions checkpointOptions) {}
+			CheckpointOptions checkpointOptions,
+			boolean advanceToEndOfEventTime) {
+
+		checkpointConsumer.accept(
+			executionAttemptID,
+			jobId,
+			checkpointId,
+			timestamp,
+			checkpointOptions,
+			advanceToEndOfEventTime);
+	}
 
 	@Override
 	public CompletableFuture<Acknowledge> freeSlot(AllocationID allocationId, Throwable cause, Time timeout) {
@@ -132,5 +152,19 @@ public class SimpleAckingTaskManagerGateway implements TaskManagerGateway {
 		} else {
 			return CompletableFuture.completedFuture(Acknowledge.get());
 		}
+	}
+
+	/**
+	 * Consumer that accepts checkpoint trigger information.
+	 */
+	public interface CheckpointConsumer {
+
+		void accept(
+			ExecutionAttemptID executionAttemptID,
+			JobID jobId,
+			long checkpointId,
+			long timestamp,
+			CheckpointOptions checkpointOptions,
+			boolean advanceToEndOfEventTime);
 	}
 }

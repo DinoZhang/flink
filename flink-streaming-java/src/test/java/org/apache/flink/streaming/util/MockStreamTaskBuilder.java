@@ -25,6 +25,7 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.fs.CloseableRegistry;
 import org.apache.flink.runtime.execution.Environment;
 import org.apache.flink.runtime.state.CheckpointStorage;
+import org.apache.flink.runtime.state.CheckpointStorageWorkerView;
 import org.apache.flink.runtime.state.StateBackend;
 import org.apache.flink.runtime.state.memory.MemoryStateBackend;
 import org.apache.flink.streaming.api.graph.StreamConfig;
@@ -32,8 +33,8 @@ import org.apache.flink.streaming.api.operators.MockStreamStatusMaintainer;
 import org.apache.flink.streaming.api.operators.StreamTaskStateInitializer;
 import org.apache.flink.streaming.api.operators.StreamTaskStateInitializerImpl;
 import org.apache.flink.streaming.runtime.streamstatus.StreamStatusMaintainer;
-import org.apache.flink.streaming.runtime.tasks.ProcessingTimeService;
 import org.apache.flink.streaming.runtime.tasks.TestProcessingTimeService;
+import org.apache.flink.streaming.runtime.tasks.TimerService;
 
 import java.util.Collections;
 import java.util.Map;
@@ -50,8 +51,8 @@ public class MockStreamTaskBuilder {
 	private ExecutionConfig executionConfig = new ExecutionConfig();
 	private CloseableRegistry closableRegistry = new CloseableRegistry();
 	private StreamStatusMaintainer streamStatusMaintainer = new MockStreamStatusMaintainer();
-	private CheckpointStorage checkpointStorage;
-	private ProcessingTimeService processingTimeService = new TestProcessingTimeService();
+	private CheckpointStorageWorkerView checkpointStorage;
+	private TimerService timerService = new TestProcessingTimeService();
 	private StreamTaskStateInitializer streamTaskStateInitializer;
 	private BiConsumer<String, Throwable> handleAsyncException = (message, throwable) -> { };
 	private Map<String, Accumulator<?, ?>> accumulatorMap = Collections.emptyMap();
@@ -61,7 +62,7 @@ public class MockStreamTaskBuilder {
 
 		StateBackend stateBackend = new MemoryStateBackend();
 		this.checkpointStorage = stateBackend.createCheckpointStorage(new JobID());
-		this.streamTaskStateInitializer = new StreamTaskStateInitializerImpl(environment, stateBackend, processingTimeService);
+		this.streamTaskStateInitializer = new StreamTaskStateInitializerImpl(environment, stateBackend);
 	}
 
 	public MockStreamTaskBuilder setName(String name) {
@@ -104,8 +105,8 @@ public class MockStreamTaskBuilder {
 		return this;
 	}
 
-	public MockStreamTaskBuilder setProcessingTimeService(ProcessingTimeService processingTimeService) {
-		this.processingTimeService = processingTimeService;
+	public MockStreamTaskBuilder setTimerService(TimerService timerService) {
+		this.timerService = timerService;
 		return this;
 	}
 
@@ -125,7 +126,7 @@ public class MockStreamTaskBuilder {
 			closableRegistry,
 			streamStatusMaintainer,
 			checkpointStorage,
-			processingTimeService,
+			timerService,
 			handleAsyncException,
 			accumulatorMap);
 	}
