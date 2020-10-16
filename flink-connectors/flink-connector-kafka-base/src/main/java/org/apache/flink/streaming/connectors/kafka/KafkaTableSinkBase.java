@@ -68,7 +68,7 @@ public abstract class KafkaTableSinkBase implements AppendStreamTableSink<Row> {
 			Properties properties,
 			Optional<FlinkKafkaPartitioner<Row>> partitioner,
 			SerializationSchema<Row> serializationSchema) {
-		this.schema = TableSchemaUtils.checkNoGeneratedColumns(schema);
+		this.schema = TableSchemaUtils.checkOnlyPhysicalColumns(schema);
 		this.topic = Preconditions.checkNotNull(topic, "Topic must not be null.");
 		this.properties = Preconditions.checkNotNull(properties, "Properties must not be null.");
 		this.partitioner = Preconditions.checkNotNull(partitioner, "Partitioner must not be null.");
@@ -101,11 +101,6 @@ public abstract class KafkaTableSinkBase implements AppendStreamTableSink<Row> {
 			.addSink(kafkaProducer)
 			.setParallelism(dataStream.getParallelism())
 			.name(TableConnectorUtils.generateRuntimeName(this.getClass(), getFieldNames()));
-	}
-
-	@Override
-	public void emitDataStream(DataStream<Row> dataStream) {
-		consumeDataStream(dataStream);
 	}
 
 	@Override

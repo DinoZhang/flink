@@ -58,7 +58,6 @@ import org.apache.flink.util.TestLogger;
 
 import org.junit.Test;
 
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -67,6 +66,7 @@ import java.util.Optional;
 import java.util.Properties;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -93,7 +93,6 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 
 	private static final Properties KAFKA_PROPERTIES = new Properties();
 	static {
-		KAFKA_PROPERTIES.setProperty("zookeeper.connect", "dummy");
 		KAFKA_PROPERTIES.setProperty("group.id", "dummy");
 		KAFKA_PROPERTIES.setProperty("bootstrap.servers", "dummy");
 	}
@@ -145,7 +144,8 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 			KAFKA_PROPERTIES,
 			deserializationSchema,
 			StartupMode.SPECIFIC_OFFSETS,
-			specificOffsets);
+			specificOffsets,
+			0L);
 
 		TableSourceValidation.validateTableSource(expected, schema);
 
@@ -169,6 +169,25 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 		final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
 		actualKafkaSource.getDataStream(mock);
 		assertTrue(getExpectedFlinkKafkaConsumer().isAssignableFrom(mock.sourceFunction.getClass()));
+		// Test commitOnCheckpoints flag should be true when set consumer group.
+		assertTrue(((FlinkKafkaConsumerBase) mock.sourceFunction).getEnableCommitOnCheckpoints());
+	}
+
+	@Test
+	public void testTableSourceCommitOnCheckpointsDisabled() {
+		Map<String, String> propertiesMap = new HashMap<>();
+		createKafkaSourceProperties().forEach((k, v) -> {
+			if (!k.equals("connector.properties.group.id")) {
+				propertiesMap.put(k, v);
+			}
+		});
+		final TableSource<?> tableSource = TableFactoryService.find(StreamTableSourceFactory.class, propertiesMap)
+			.createStreamTableSource(propertiesMap);
+		final StreamExecutionEnvironmentMock mock = new StreamExecutionEnvironmentMock();
+		// Test commitOnCheckpoints flag should be false when do not set consumer group.
+		((KafkaTableSourceBase) tableSource).getDataStream(mock);
+		assertTrue(mock.sourceFunction instanceof FlinkKafkaConsumerBase);
+		assertFalse(((FlinkKafkaConsumerBase) mock.sourceFunction).getEnableCommitOnCheckpoints());
 	}
 
 	@Test
@@ -212,7 +231,8 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 			KAFKA_PROPERTIES,
 			deserializationSchema,
 			StartupMode.SPECIFIC_OFFSETS,
-			specificOffsets);
+			specificOffsets,
+			0L);
 
 		TableSourceValidation.validateTableSource(expected, schema);
 
@@ -222,7 +242,6 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 
 		// use legacy properties
 		legacyPropertiesMap.remove("connector.specific-offsets");
-		legacyPropertiesMap.remove("connector.properties.zookeeper.connect");
 		legacyPropertiesMap.remove("connector.properties.bootstrap.servers");
 		legacyPropertiesMap.remove("connector.properties.group.id");
 
@@ -234,12 +253,10 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 		legacyPropertiesMap.put("connector.specific-offsets.0.offset", "100");
 		legacyPropertiesMap.put("connector.specific-offsets.1.partition", "1");
 		legacyPropertiesMap.put("connector.specific-offsets.1.offset", "123");
-		legacyPropertiesMap.put("connector.properties.0.key", "zookeeper.connect");
+		legacyPropertiesMap.put("connector.properties.0.key", "bootstrap.servers");
 		legacyPropertiesMap.put("connector.properties.0.value", "dummy");
-		legacyPropertiesMap.put("connector.properties.1.key", "bootstrap.servers");
+		legacyPropertiesMap.put("connector.properties.1.key", "group.id");
 		legacyPropertiesMap.put("connector.properties.1.value", "dummy");
-		legacyPropertiesMap.put("connector.properties.2.key", "group.id");
-		legacyPropertiesMap.put("connector.properties.2.value", "dummy");
 
 		final TableSource<?> actualSource = TableFactoryService.find(StreamTableSourceFactory.class, legacyPropertiesMap)
 			.createStreamTableSource(legacyPropertiesMap);
@@ -302,7 +319,7 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 		// test Kafka producer
 		final KafkaTableSinkBase actualKafkaSink = (KafkaTableSinkBase) actualSink;
 		final DataStreamMock streamMock = new DataStreamMock(new StreamExecutionEnvironmentMock(), schema.toRowType());
-		actualKafkaSink.emitDataStream(streamMock);
+		actualKafkaSink.consumeDataStream(streamMock);
 		assertTrue(getExpectedFlinkKafkaProducer().isAssignableFrom(streamMock.sinkFunction.getClass()));
 	}
 
@@ -328,7 +345,6 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 
 		// use legacy properties
 		legacyPropertiesMap.remove("connector.specific-offsets");
-		legacyPropertiesMap.remove("connector.properties.zookeeper.connect");
 		legacyPropertiesMap.remove("connector.properties.bootstrap.servers");
 		legacyPropertiesMap.remove("connector.properties.group.id");
 
@@ -340,12 +356,10 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 		legacyPropertiesMap.put("connector.specific-offsets.0.offset", "100");
 		legacyPropertiesMap.put("connector.specific-offsets.1.partition", "1");
 		legacyPropertiesMap.put("connector.specific-offsets.1.offset", "123");
-		legacyPropertiesMap.put("connector.properties.0.key", "zookeeper.connect");
+		legacyPropertiesMap.put("connector.properties.0.key", "bootstrap.servers");
 		legacyPropertiesMap.put("connector.properties.0.value", "dummy");
-		legacyPropertiesMap.put("connector.properties.1.key", "bootstrap.servers");
+		legacyPropertiesMap.put("connector.properties.1.key", "group.id");
 		legacyPropertiesMap.put("connector.properties.1.value", "dummy");
-		legacyPropertiesMap.put("connector.properties.2.key", "group.id");
-		legacyPropertiesMap.put("connector.properties.2.value", "dummy");
 
 		final TableSink<?> actualSink = TableFactoryService.find(StreamTableSinkFactory.class, legacyPropertiesMap)
 			.createStreamTableSink(legacyPropertiesMap);
@@ -355,7 +369,7 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 		// test Kafka producer
 		final KafkaTableSinkBase actualKafkaSink = (KafkaTableSinkBase) actualSink;
 		final DataStreamMock streamMock = new DataStreamMock(new StreamExecutionEnvironmentMock(), schema.toRowType());
-		actualKafkaSink.emitDataStream(streamMock);
+		actualKafkaSink.consumeDataStream(streamMock);
 		assertTrue(getExpectedFlinkKafkaProducer().isAssignableFrom(streamMock.sinkFunction.getClass()));
 	}
 
@@ -415,8 +429,13 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 		}
 
 		@Override
-		public Collection<Transformation<?>> getTransitivePredecessors() {
+		public List<Transformation<?>> getTransitivePredecessors() {
 			return null;
+		}
+
+		@Override
+		public List<Transformation<?>> getInputs() {
+			return Collections.emptyList();
 		}
 	}
 
@@ -439,7 +458,8 @@ public abstract class KafkaTableSourceSinkFactoryTestBase extends TestLogger {
 		Properties properties,
 		DeserializationSchema<Row> deserializationSchema,
 		StartupMode startupMode,
-		Map<KafkaTopicPartition, Long> specificStartupOffsets);
+		Map<KafkaTopicPartition, Long> specificStartupOffsets,
+		long startupTimestampMillis);
 
 	protected abstract KafkaTableSinkBase getExpectedKafkaTableSink(
 		TableSchema schema,
